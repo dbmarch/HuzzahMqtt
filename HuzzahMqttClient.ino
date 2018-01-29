@@ -317,7 +317,11 @@ void loop() {
   if (poweredUp)  {
     LOG_PRINTFLN("Sending Hello Message");
                   // Add publish here if required
-    const char* buf = "Hello";
+    //const char* buf = "Hello";
+    char buf[30];
+    
+    strcpy (buf, WiFi.localIP().toString().c_str());
+    
     MqttClient::Message message;
     message.qos = MqttClient::QOS0;
     message.retained = false;
