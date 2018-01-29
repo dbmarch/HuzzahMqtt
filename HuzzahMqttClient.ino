@@ -1,7 +1,20 @@
 /*
+ * 
+ * This client will join a wifi network from a list of wifi SSID's.
+ * From there it will look for an MQTT broker trying a predefined list - and ultimately trying every IP address.
+ * 
+ * Once it connects to the broker it will generate:
+ * 1) Power Up message
+ * 2) Ambient Light status
+ * 3) LightFeedback Status
+ * 4) Power Fail message
+ * 
+ * It will subscribe to:
+ * 1) Light Control 
+ * 2)
  *******************************************************************************
  *
- * Purpose: Example of using the Arduino MqttClient with Esp8266WiFiClient.
+ * Started from an example of using the Arduino MqttClient with Esp8266WiFiClient.
  * Project URL: https://github.com/monstrenyatko/ArduinoMqtt
  *
  *******************************************************************************
@@ -11,7 +24,6 @@
  * (See accompanying file LICENSE or copy at http://opensource.org/licenses/MIT)
  *******************************************************************************
  */
-
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 
@@ -32,22 +44,54 @@ void logfln(const char *fmt, ...) {
 	Serial.println(buf);
 }
 
+#define LED_RED   0
+#define LED_BLUE  2
+
 #define HW_UART_SPEED									115200L
-#define MQTT_ID											"TEST-ID"
+#define MQTT_ID   								    "lamp-001"
 
-#define WIFI_SSID  "YOUR_SSID"
-#define WIFI_PWD   "YOUR_PASSWORD"
+struct wifiLogin {
+  const char * ssid;
+  const char * pass;
+} ;
 
-//#define MQTT_SERVER "test.mosquitto.org"
-#define MQTT_SERVER "192.168.1.79"
-//const char* MQTT_TOPIC_SUB = "#";
-const char * MQTT_TOPIC_SUB= "lights/ambient/feedback";
-const char* MQTT_TOPIC_PUB = "/STARTUP/";
+
+
+#include "wifiList.h"
+#ifndef __WIFILIST_H_
+//  Create this structure here or put in the wifiList.h file.
+static const struct wifiLogin wifi [] = 
+{
+  {  "ssid_1", "password_ssid_1"},
+  {  "ssid_2", "password_ssid_2"},
+  {  "ssid_3", "password_ssid_3"}
+};
+#endif
+
+#define NUM_WIFI (sizeof (wifi) / sizeof (wifiLogin))
+
+static const char * mqttBroker[] = 
+{
+  "thejoveexpress.local",
+  "pihub"
+};
+#define NUM_MQTT_BROKER (sizeof(mqttBroker) / sizeof(char*) )
+
+const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup";
+const char* MQTT_TOPIC_POWER        = MQTT_ID "/power";
+const char* MQTT_TOPIC_AMBIENT      = MQTT_ID "/ambient";
+const char* MQTT_TOPIC_LAMPFEEDBACK = MQTT_ID "/lampfeedback";
 
 static MqttClient *mqtt = NULL;
 static WiFiClient network;
 static bool subscribed=false;
 static bool poweredUp = true;
+static bool online = false;
+int    wifiIndex = 0;
+int    redState = HIGH;
+
+int  ambientLevel = 0;
+
 
 
 // ============== Object to supply system functions ============================
@@ -63,25 +107,87 @@ public:
 	}
 };
 
+void blinkRed(int cnt) {
+   redState = (redState == HIGH ? LOW : HIGH);
+   digitalWrite (LED_RED, redState);
+   for (int i = 0; i < cnt; i++) {
+      delay(100);
+      redState = (redState == HIGH ? LOW : HIGH);
+      digitalWrite (LED_RED, redState);
+      delay(100);
+      redState = (redState == HIGH ? LOW : HIGH);
+      digitalWrite (LED_RED, redState);
+   }
+    delay(100);
+    redState = (redState == HIGH ? LOW : HIGH);
+    digitalWrite (LED_RED, redState);
+}
+
 // ============== Setup all objects ============================================
 void setup() {
+  pinMode (LED_RED, OUTPUT);
+  pinMode (LED_BLUE, OUTPUT);
+
+  digitalWrite(LED_RED, redState);       // sets the digital pin 13 on
+  digitalWrite(LED_BLUE, HIGH);
+  
 	// Setup hardware serial for logging
 	Serial.begin(HW_UART_SPEED);
+	
 	while (!Serial);
 
-	// Setup WiFi network
-	WiFi.mode(WIFI_STA);
-	WiFi.hostname("ESP_" MQTT_ID);
-	WiFi.begin(WIFI_SSID, WIFI_PWD);
-	LOG_PRINTFLN("\n");
-	LOG_PRINTFLN("Connecting to WiFi");
-	while (WiFi.status() != WL_CONNECTED) {
-		delay(500);
-		LOG_PRINTFLN(".");
-	}
+  LOG_PRINTFLN("\n");
+
+  LOG_PRINTFLN( "Number Brokers  = %d", NUM_MQTT_BROKER);
+  for (int i = 0; i < NUM_MQTT_BROKER; i++)
+     LOG_PRINTFLN ("mqttBroker[%d]: %s", i, mqttBroker[i]);
+
+  LOG_PRINTFLN( "Number Wifi = %d", NUM_WIFI);
+  for (int i = 0; i < NUM_WIFI; i++)
+     LOG_PRINTFLN ("wifi[%d]: %s", i, wifi[i].ssid);
+     
+
+  // Setup WiFi network
+   WiFi.mode(WIFI_STA);
+   WiFi.hostname(MQTT_ID);
+ 
+  while (!online) {
+    WiFi.begin (wifi[wifiIndex].ssid, wifi [wifiIndex].pass);
+    
+  	LOG_PRINTFLN("Connecting to WiFi");
+    LOG_PRINTFLN(wifi[wifiIndex].ssid);
+    LOG_PRINTFLN(wifi[wifiIndex].pass);
+
+    for (int i = 0; i < 20; i++) {
+      redState = (redState == HIGH ? LOW : HIGH);
+      digitalWrite (LED_RED,redState);
+      
+      if (WiFi.status() == WL_CONNECTED) {
+         digitalWrite (LED_BLUE, LOW);
+         online = true;
+         LOG_PRINTFLN("CONNECTED!");
+         break;
+      } else {
+         LOG_PRINTFLN(".");
+         delay(500); 
+       }
+    }
+    if (!online) {
+      LOG_PRINTFLN ("TRY OTHER NETWORK");
+      digitalWrite (LED_BLUE, LOW);
+      delay (1000);
+      digitalWrite (LED_BLUE, HIGH);
+      wifiIndex++;
+      if (wifiIndex >= NUM_WIFI)
+         wifiIndex = 0;
+    } 
+  }
+  
+  digitalWrite (LED_BLUE, LOW);
 	LOG_PRINTFLN("Connected to WiFi");
 	LOG_PRINTFLN("IP: %s", WiFi.localIP().toString().c_str());
-
+  LOG_PRINTFLN("GATEWAY: %s", WiFi.gatewayIP().toString().c_str());
+  
 	// Setup MqttClient
 	MqttClient::System *mqttSystem = new System;
 	MqttClient::Logger *mqttLogger = new MqttClient::LoggerImpl<HardwareSerial>(Serial);
@@ -114,29 +220,66 @@ void processMessage(MqttClient::MessageData& md) {
     "Message arrived: qos %d, retained %d, dup %d, packetid %d, payload:[%s]",
     msg.qos, msg.retained, msg.dup, msg.id, payload
   );
+  blinkRed(2);
+
 }
 
 // ============== Main loop ====================================================
 void loop() {
 	// Check connection status
+
 	if (!mqtt->isConnected()) {
+    
 		// Close connection if exists
 		network.stop();
 		// Re-establish TCP connection with MQTT broker
-		LOG_PRINTFLN("Connecting");
-//    network.connect("test.mosquitto.org", 1883);
-     network.connect(MQTT_SERVER, 1883);
-     poweredUp = true;
-  	
-  	if (!network.connected()) {
-			LOG_PRINTFLN("Can't establish the TCP connection");
-			delay(5000);
-			ESP.reset();
-		}
+    poweredUp = true;
 
-
-
-
+    for (int i = 0; i < NUM_MQTT_BROKER; i++) {
+      LOG_PRINTFLN("Connecting to BROKER: %s", mqttBroker[i]);
+      network.connect(mqttBroker [i], 1883);
+      if (network.connected()){
+        LOG_PRINTFLN("Connected to BROKER: %s", mqttBroker[i]);
+        break;
+      }
+      else
+        blinkRed(5);
+    }
+    if (!network.connected()) {
+      LOG_PRINTFLN("Attempting to find Broker @ Gateway IP");
+      network.connect(WiFi.gatewayIP(), 1883);
+      LOG_PRINTFLN ("Found Broker @ Gateway IP");
+    }
+    
+    if (!network.connected()) {
+       LOG_PRINTFLN("Can't establish the TCP connection to BROKER");
+       blinkRed(5);
+        // Let's scan the network for brokers:
+         uint32_t addr = WiFi.gatewayIP();
+         unsigned char *ipBytes= (unsigned char*) &addr;
+         // Typically gateway IP Address ends in x.x.x.1
+         LOG_PRINTFLN("Gateway = %d.%d.%d.%d",ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3]); 
+         for (int i = 1; i < 254; i++) {
+             ipBytes[3] = i;
+             LOG_PRINTFLN("Attempting Broker @ %d.%d.%d.%d",ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3]); 
+             network.connect(addr, 1883);
+             if (network.connected()) {
+                 LOG_PRINTFLN("Connected to BROKER!");
+                 break;
+             }
+         }
+    }
+    if (!network.connected()) {
+       
+       delay(5000);    // Try again in 5 seconds....
+       return;
+       //ESP.reset();
+	  } else {
+       LOG_PRINTFLN ("TCP CONNECTION to broker established");
+  	}
+    redState = LOW;
+    digitalWrite (LED_RED, redState); /* Set RED LED ON */
+     
     // Start new MQTT connection
 		MqttClient::ConnectResult connectResult;
 		
@@ -154,21 +297,25 @@ void loop() {
   			}
   		}
 
+
     if (!subscribed) {
     // Add subscribe here if required
       MqttClient::Error::type rc = mqtt->subscribe(
-        MQTT_TOPIC_SUB, MqttClient::QOS0, processMessage
+        MQTT_TOPIC_POWER, MqttClient::QOS0, processMessage
         );
+
+        LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER);
+        
        subscribed = true;
        if (rc != MqttClient::Error::SUCCESS) {
         LOG_PRINTFLN("Subscribe error: %i", rc);
-        LOG_PRINTFLN("Drop connection");
+        //  LOG_PRINTFLN("Drop connection");
         //  mqtt->disconnect();
         subscribed = false;
         return;
        }  // Error
     }  // ! subscribed
-    
+  }
 		  if (poweredUp)  {
           LOG_PRINTFLN("Sending Hello Message");
     			// Add publish here if required
@@ -179,10 +326,31 @@ void loop() {
           message.dup = false;
           message.payload = (void*) buf;
           message.payloadLen = strlen(buf) + 1;
-          mqtt->publish(MQTT_TOPIC_PUB, message);
+          mqtt->publish(MQTT_TOPIC_POWERUP, message);
+          blinkRed(1);
           poweredUp = false;  
     	  	}   // Powered up
-		// Idle for 30 seconds
-		mqtt->yield(30000L);
-	  }  //MQTT Connected
+        else
+        {
+          LOG_PRINTFLN("Sending ambient status");
+          // Add publish here if required
+          int32_t value = ambientLevel;
+          char * buf = "1";
+          MqttClient::Message message;
+          message.qos = MqttClient::QOS0;
+          message.retained = false;
+          message.dup = false;
+          message.payload = (void*) &value;
+          message.payloadLen = sizeof (value);
+//           message.payload = (void*) buf;
+//           message.payloadLen = strlen(buf) + 1;
+           mqtt->publish(MQTT_TOPIC_AMBIENT, message);
+          blinkRed(1);
+          ambientLevel++;
+          if (ambientLevel > 255)  
+             ambientLevel = 0;
+        }
+		// Idle for 250msec
+		mqtt->yield(250L);
+   
 }  //Loop
