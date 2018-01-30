@@ -46,6 +46,9 @@ void logfln(const char *fmt, ...) {
 
 #define LED_RED   0
 #define LED_BLUE  2
+#define RELAY     14
+#define LIGHTFEEDBACK  12
+
 
 #define HW_UART_SPEED   115200L
 #define MQTT_ID         "lamp-001"
@@ -72,7 +75,8 @@ static const struct wifiLogin wifi [] =
 static const char * mqttBroker[] = 
 {
   "thejoveexpress.local",
-  "pihub"
+  "pihub",
+  "192.168.1.240"
 };
 #define NUM_MQTT_BROKER (sizeof(mqttBroker) / sizeof(char*) )
 
@@ -125,9 +129,12 @@ void blinkRed(int cnt) {
 void setup() {
   pinMode (LED_RED, OUTPUT);
   pinMode (LED_BLUE, OUTPUT);
-
+  pinMode (RELAY, OUTPUT);
+  pinMode (LIGHTFEEDBACK, INPUT);
+  
   digitalWrite(LED_RED, redState);       // sets the digital pin 13 on
   digitalWrite(LED_BLUE, HIGH);
+  digitalWrite (RELAY, LOW);
   
   // Setup hardware serial for logging
   Serial.begin(HW_UART_SPEED);
@@ -221,6 +228,13 @@ void processPowerMessage(MqttClient::MessageData& md) {
     msg.qos, msg.retained, msg.dup, msg.id, payload
   );
 
+  if (payload[0] == 0)
+      digitalWrite (RELAY, LOW);
+  else if (payload[0] == 1)
+      digitalWrite (RELAY, HIGH);
+  else
+      LOG_PRINTFLN ("Invalid Power Setting");
+          
   blinkRed(2);
 }
 
@@ -334,7 +348,8 @@ void loop() {
     }   // Powered up
     else
     {
-      LOG_PRINTFLN("Sending ambient status");
+      ambientLevel = analogRead (A0);
+      LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
       // Add publish here if required
       int32_t value = ambientLevel;
       char * buf = "1";
@@ -344,13 +359,8 @@ void loop() {
       message.dup = false;
       message.payload = (void*) &value;
       message.payloadLen = sizeof (value);
-//       message.payload = (void*) buf;
-//       message.payloadLen = strlen(buf) + 1;
       mqtt->publish(MQTT_TOPIC_AMBIENT, message);
       blinkRed(1);
-      ambientLevel++;
-      if (ambientLevel > 255)  
-         ambientLevel = 0;
     }
     // Idle for 250msec
     mqtt->yield(250L);
