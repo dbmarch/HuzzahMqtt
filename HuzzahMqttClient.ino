@@ -51,7 +51,8 @@ void logfln(const char *fmt, ...) {
 
 
 #define HW_UART_SPEED   115200L
-#define MQTT_ID         "lamp-001"
+//#define MQTT_ID         "lamp-001"
+#define MQTT_ID         "lamp-002"
 
 struct wifiLogin {
   const char * ssid;
@@ -221,7 +222,7 @@ void processPowerMessage(MqttClient::MessageData& md) {
   char payload[msg.payloadLen + 1];
   memcpy(payload, msg.payload, msg.payloadLen);
   payload[msg.payloadLen] = '\0';
-  LOG_PRINTFLN ("Received Power Control");
+  LOG_PRINTFLN ("Received Power Control: %d", payload[0]);
   LOG_PRINTFLN ("PayloadLen = %d", msg.payloadLen);
   LOG_PRINTFLN(
     "Message arrived: qos %d, retained %d, dup %d, packetid %d, payload:[%s]",
