@@ -51,8 +51,10 @@ void logfln(const char *fmt, ...) {
 
 
 #define HW_UART_SPEED   115200L
-//#define MQTT_ID         "lamp-001"
-#define MQTT_ID         "lamp-002"
+
+// convert to using a port pin for identification
+#define MQTT_ID         "lamp-001"
+//#define MQTT_ID         "lamp-002"
 
 struct wifiLogin {
   const char * ssid;
@@ -89,7 +91,7 @@ const char* MQTT_TOPIC_LAMPFEEDBACK = MQTT_ID "/lampfeedback";
 static MqttClient *mqtt = NULL;
 static WiFiClient network;
 static bool subscribed=false;
-static bool poweredUp = true;
+static bool powerupSent = false;
 static bool online = false;
 int    wifiIndex = 0;
 int    redState = HIGH;
@@ -239,15 +241,71 @@ void processPowerMessage(MqttClient::MessageData& md) {
   blinkRed(2);
 }
 
-// ============== Main loop ====================================================
-void loop() {
-  // Check connection status
+// ============== Publish Messages  ========================================
+void publishAmbientMessage (void) {
+      ambientLevel = analogRead (A0);
+      LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
+      int32_t value = ambientLevel;
+      MqttClient::Message message;
+      message.qos = MqttClient::QOS0;
+      message.retained = false;
+      message.dup = false;
+      message.payload = (void*) &value;
+      message.payloadLen = sizeof (value);
+      mqtt->publish(MQTT_TOPIC_AMBIENT, message);
+      blinkRed(1);
+}
 
+void publishPowerupMessage(void) {
+    LOG_PRINTFLN("Sending Hello Message");
+                  // Add publish here if required
+    char buf[30];
+    strcpy (buf, WiFi.localIP().toString().c_str());
+    MqttClient::Message message;
+    message.qos = MqttClient::QOS0;
+    message.retained = false;
+    message.dup = false;
+    message.payload = (void*) buf;
+    message.payloadLen = strlen(buf) + 1;
+    mqtt->publish(MQTT_TOPIC_POWERUP, message);
+    blinkRed(1);
+}
+
+void publishPowerfailMessage(void) {
+}
+
+void publishlightfeedbackMessage(void) {
+}
+
+// ============== subscribeBroker ====================================================
+void subscribeBroker( void ) {
+    if (!subscribed) {
+      // Add subscribe here if required
+      MqttClient::Error::type rc = mqtt->subscribe(
+          MQTT_TOPIC_POWER, MqttClient::QOS0, processPowerMessage
+      );
+
+      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER);
+        
+      subscribed = true;
+      if (rc != MqttClient::Error::SUCCESS) {
+         LOG_PRINTFLN("Subscribe error: %i", rc);
+         //  LOG_PRINTFLN("Drop connection");
+         //  mqtt->disconnect();
+         subscribed = false;
+         return;
+      }  // Error
+    }  // ! subscribed
+}
+
+// ============== Connect Broker ====================================================
+bool connectBrokerSocket ( void ) {
+  MqttClient::ConnectResult connectResult;
   if (!mqtt->isConnected()) {
      // Close connection if exists
      network.stop();
      // Re-establish TCP connection with MQTT broker
-     poweredUp = true;
+     powerupSent = false;
 
      for (int i = 0; i < NUM_MQTT_BROKER; i++) {
        LOG_PRINTFLN("Connecting to BROKER: %s", mqttBroker[i]);
@@ -285,85 +343,46 @@ void loop() {
     }
     if (!network.connected()) {
        delay(5000);    // Try again in 5 seconds....
-       return;
+       return (false);
        //ESP.reset();
     } else {
        LOG_PRINTFLN ("TCP CONNECTION to broker established");
     }
-    redState = LOW;
-    digitalWrite (LED_RED, redState); /* Set RED LED ON */
-     
+
+   redState = LOW;
+   digitalWrite (LED_RED, redState); /* Set RED LED ON */
+
+   MQTTPacket_connectData options = MQTTPacket_connectData_initializer;
+   options.MQTTVersion = 4;
+   options.clientID.cstring = (char*)MQTT_ID;
+   options.cleansession = true;
+   options.keepAliveInterval = 15; // 15 seconds
+   MqttClient::Error::type rc = mqtt->connect(options, connectResult);
+   if (rc != MqttClient::Error::SUCCESS) {
+      LOG_PRINTFLN("Connection error: %i", rc);
+      // should turn off red led and disconnect from network...
+      return false;
+   }
+   subscribeBroker();
+   return (true);
+  }   // ! connnected
+}
+
+// ============== Main loop ====================================================
+void loop() {
     // Start new MQTT connection
-    MqttClient::ConnectResult connectResult;
-    
-    // Connect
-    {
-       MQTTPacket_connectData options = MQTTPacket_connectData_initializer;
-       options.MQTTVersion = 4;
-       options.clientID.cstring = (char*)MQTT_ID;
-       options.cleansession = true;
-       options.keepAliveInterval = 15; // 15 seconds
-       MqttClient::Error::type rc = mqtt->connect(options, connectResult);
-       if (rc != MqttClient::Error::SUCCESS) {
-               LOG_PRINTFLN("Connection error: %i", rc);
-               return;
-       }
-    }
-
-
-    if (!subscribed) {
-      // Add subscribe here if required
-      MqttClient::Error::type rc = mqtt->subscribe(
-          MQTT_TOPIC_POWER, MqttClient::QOS0, processPowerMessage
-      );
-
-      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER);
-        
-      subscribed = true;
-      if (rc != MqttClient::Error::SUCCESS) {
-         LOG_PRINTFLN("Subscribe error: %i", rc);
-         //  LOG_PRINTFLN("Drop connection");
-         //  mqtt->disconnect();
-         subscribed = false;
-         return;
-      }  // Error
-    }  // ! subscribed
-  }  // ! connected
-  if (poweredUp)  {
-    LOG_PRINTFLN("Sending Hello Message");
-                  // Add publish here if required
-    //const char* buf = "Hello";
-    char buf[30];
-    
-    strcpy (buf, WiFi.localIP().toString().c_str());
-    
-    MqttClient::Message message;
-    message.qos = MqttClient::QOS0;
-    message.retained = false;
-    message.dup = false;
-    message.payload = (void*) buf;
-    message.payloadLen = strlen(buf) + 1;
-    mqtt->publish(MQTT_TOPIC_POWERUP, message);
-    blinkRed(1);
-    poweredUp = false;  
-    }   // Powered up
-    else
-    {
-      ambientLevel = analogRead (A0);
-      LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
-      // Add publish here if required
-      int32_t value = ambientLevel;
-      char * buf = "1";
-      MqttClient::Message message;
-      message.qos = MqttClient::QOS0;
-      message.retained = false;
-      message.dup = false;
-      message.payload = (void*) &value;
-      message.payloadLen = sizeof (value);
-      mqtt->publish(MQTT_TOPIC_AMBIENT, message);
-      blinkRed(1);
-    }
-    // Idle for 250msec
-    mqtt->yield(250L);
+    // Check connection status
+    if (!connectBrokerSocket())
+       return;
+ 
+  if (!powerupSent)  {
+     publishPowerupMessage();
+     powerupSent = true;
+  } else {
+     // Need to add logic to read our inputs and decide when to publish the messages.
+     publishAmbientMessage();
+  }
+  // Idle for 250msec
+  mqtt->yield(250L);
 }  //Loop
 
