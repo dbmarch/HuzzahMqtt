@@ -280,6 +280,7 @@ void publishPowerupMessage(void) {
                   // Add publish here if required
     char buf[30];
     strcpy (buf, WiFi.localIP().toString().c_str());
+    buf[WiFi.localIP().toString().length()] = 0;
     MqttClient::Message message;
     message.qos = MqttClient::QOS0;
     message.retained = false;
@@ -294,8 +295,8 @@ void publishPowerfailMessage(void) {
 }
 
 void publishLightfeedbackMessage(bool onOff) {
-      LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
       uint8_t buf = onOff ? 1 : 0;
+      LOG_PRINTFLN("Sending LightFeedback status: %02X", buf);
       MqttClient::Message message;
       message.qos = MqttClient::QOS0;
       message.retained = false;
