@@ -53,8 +53,13 @@ void logfln(const char *fmt, ...) {
 #define HW_UART_SPEED   115200L
 
 // convert to using a port pin for identification
+#define UNIT    1
+
+#if UNIT == 1
 #define MQTT_ID         "lamp-001"
-//#define MQTT_ID         "lamp-002"
+#else
+#define MQTT_ID         "lamp-002"
+#endif
 
 struct wifiLogin {
   const char * ssid;
@@ -97,6 +102,12 @@ int    wifiIndex = 0;
 int    redState = HIGH;
 
 int  ambientLevel = 0;
+bool powerSetting = false;
+
+void publishAmbientMessage (void);
+void publishLightfeedbackMessage ( bool onOff);
+void publishPowerupMessage(void);
+void publishPowerfailMessage(void);
 
 
 
@@ -229,15 +240,17 @@ void processPowerMessage(MqttClient::MessageData& md) {
   LOG_PRINTFLN(
     "Message arrived: qos %d, retained %d, dup %d, packetid %d, payload:[%s]",
     msg.qos, msg.retained, msg.dup, msg.id, payload
-  );
+  );  
 
-  if (payload[0] == 0)
-      digitalWrite (RELAY, LOW);
-  else if (payload[0] == 1)
+  powerSetting = (payload[0] == 0) ? false : true;
+  if (powerSetting)
       digitalWrite (RELAY, HIGH);
   else
-      LOG_PRINTFLN ("Invalid Power Setting");
-          
+      digitalWrite (RELAY, LOW);
+
+  // TODO:   We need to read the light sensor to see if the light is on or off.
+  publishLightfeedbackMessage(powerSetting);
+  
   blinkRed(2);
 }
 
@@ -245,13 +258,19 @@ void processPowerMessage(MqttClient::MessageData& md) {
 void publishAmbientMessage (void) {
       ambientLevel = analogRead (A0);
       LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
-      int32_t value = ambientLevel;
+      char buf[10];
+      buf[0] = (uint8_t)((ambientLevel & 0xFF000000) >> 24);
+      buf[1] = (uint8_t)((ambientLevel & 0x00FF0000) >> 16);
+      buf[2] = (uint8_t)((ambientLevel & 0x0000FF00) >> 8 );
+      buf[3] = (uint8_t)((ambientLevel & 0x000000FF)) ;
+      LOG_PRINTFLN("Bytes = %02X %02X %02X %02X", buf[0], buf[1], buf[2], buf[3]);
+
       MqttClient::Message message;
       message.qos = MqttClient::QOS0;
       message.retained = false;
       message.dup = false;
-      message.payload = (void*) &value;
-      message.payloadLen = sizeof (value);
+      message.payload = (void*) buf;
+      message.payloadLen = 4;
       mqtt->publish(MQTT_TOPIC_AMBIENT, message);
       blinkRed(1);
 }
@@ -274,7 +293,17 @@ void publishPowerupMessage(void) {
 void publishPowerfailMessage(void) {
 }
 
-void publishlightfeedbackMessage(void) {
+void publishLightfeedbackMessage(bool onOff) {
+      LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
+      uint8_t buf = onOff ? 1 : 0;
+      MqttClient::Message message;
+      message.qos = MqttClient::QOS0;
+      message.retained = false;
+      message.dup = false;
+      message.payload = (void*) &buf;
+      message.payloadLen = 1;
+      mqtt->publish(MQTT_TOPIC_AMBIENT, message);
+      blinkRed(1);
 }
 
 // ============== subscribeBroker ====================================================
@@ -377,6 +406,7 @@ void loop() {
  
   if (!powerupSent)  {
      publishPowerupMessage();
+     publishLightfeedbackMessage(powerSetting);
      powerupSent = true;
   } else {
      // Need to add logic to read our inputs and decide when to publish the messages.
