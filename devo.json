@@ -68,9 +68,9 @@
       ],
       "messageServerId": 4,
       "properties": {
-        "ambient": "number",
-        "lampfeedback": "boolean",
         "power": "boolean",
+        "ambient": "number",
+        "lamp": "boolean",
         "powerup": "text"
       }
     },

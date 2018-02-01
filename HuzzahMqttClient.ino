@@ -88,10 +88,10 @@ static const char * mqttBroker[] =
 };
 #define NUM_MQTT_BROKER (sizeof(mqttBroker) / sizeof(char*) )
 
-const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup";
-const char* MQTT_TOPIC_POWER        = MQTT_ID "/power";
-const char* MQTT_TOPIC_AMBIENT      = MQTT_ID "/ambient";
-const char* MQTT_TOPIC_LAMPFEEDBACK = MQTT_ID "/lampfeedback";
+const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup/feedback";
+const char* MQTT_TOPIC_POWER        = MQTT_ID "/power/control";
+const char* MQTT_TOPIC_AMBIENT      = MQTT_ID "/ambient/feedback";
+const char* MQTT_TOPIC_LIGHTFEEDBACK = MQTT_ID "/light/feedback";
 
 static MqttClient *mqtt = NULL;
 static WiFiClient network;
@@ -303,7 +303,7 @@ void publishLightfeedbackMessage(bool onOff) {
       message.dup = false;
       message.payload = (void*) &buf;
       message.payloadLen = 1;
-      mqtt->publish(MQTT_TOPIC_AMBIENT, message);
+      mqtt->publish(MQTT_TOPIC_LIGHTFEEDBACK, message);
       blinkRed(1);
 }
 
