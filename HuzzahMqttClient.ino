@@ -88,8 +88,13 @@ static const char * mqttBroker[] =
 };
 #define NUM_MQTT_BROKER (sizeof(mqttBroker) / sizeof(char*) )
 
-const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup/feedback";
+//Subscriptions:
+const char* MQTT_TOPIC_FEEDBACK     = MQTT_ID "/feedback";
 const char* MQTT_TOPIC_POWER        = MQTT_ID "/power/control";
+
+//Publications:
+const char* MQTT_TOPIC_LIFECYCLE    = MQTT_ID "/lifecycle/feedback";
+const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup/feedback";
 const char* MQTT_TOPIC_AMBIENT      = MQTT_ID "/ambient/feedback";
 const char* MQTT_TOPIC_LIGHTFEEDBACK = MQTT_ID "/light/feedback";
 
@@ -108,7 +113,7 @@ void publishAmbientMessage (void);
 void publishLightfeedbackMessage ( bool onOff);
 void publishPowerupMessage(void);
 void publishPowerfailMessage(void);
-
+void publishLifecycle (void);
 
 
 // ============== Object to supply system functions ============================
@@ -254,6 +259,22 @@ void processPowerMessage(MqttClient::MessageData& md) {
   blinkRed(2);
 }
 
+void processFeedbackMessage(MqttClient::MessageData& md) {
+  const MqttClient::Message& msg = md.message;
+//  memcpy(payload, msg.payload, msg.payloadLen);
+//  payload[msg.payloadLen] = '\0';
+  LOG_PRINTFLN ("Received Feedback");
+  LOG_PRINTFLN ("PayloadLen = %d", msg.payloadLen);
+  LOG_PRINTFLN( "Message arrived: qos %d, retained %d, dup %d, packetid %d",
+    msg.qos, msg.retained, msg.dup, msg.id );  
+
+  // There are no args expected.  Now we are to publish everything about our device:
+  publishPowerupMessage();
+  publishLightfeedbackMessage(powerSetting);  // we should really read the light state from a sensor!
+  publishAmbientMessage();
+  blinkRed(3);
+}
+
 // ============== Publish Messages  ========================================
 void publishAmbientMessage (void) {
       ambientLevel = analogRead (A0);
@@ -286,8 +307,22 @@ void publishPowerupMessage(void) {
     message.retained = false;
     message.dup = false;
     message.payload = (void*) buf;
-    message.payloadLen = strlen(buf) + 1;
+    message.payloadLen = strlen(buf);   // Don't include the NULL in the message.
     mqtt->publish(MQTT_TOPIC_POWERUP, message);
+    blinkRed(1);
+}
+
+void publishLifecycleMessage(void) {
+    LOG_PRINTFLN("Sending lifecycle Message");
+    uint8_t  buf[10];
+    buf[0] = 1;
+    MqttClient::Message message;
+    message.qos = MqttClient::QOS0;
+    message.retained = false;
+    message.dup = false;
+    message.payload = (void*) buf;
+    message.payloadLen = 1;   
+    mqtt->publish(MQTT_TOPIC_LIFECYCLE, message);
     blinkRed(1);
 }
 
@@ -314,14 +349,16 @@ void subscribeBroker( void ) {
       MqttClient::Error::type rc = mqtt->subscribe(
           MQTT_TOPIC_POWER, MqttClient::QOS0, processPowerMessage
       );
-
       LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER);
+
+     rc = mqtt->subscribe(
+          MQTT_TOPIC_FEEDBACK, MqttClient::QOS0, processFeedbackMessage
+      );
+      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_FEEDBACK);
         
       subscribed = true;
       if (rc != MqttClient::Error::SUCCESS) {
          LOG_PRINTFLN("Subscribe error: %i", rc);
-         //  LOG_PRINTFLN("Drop connection");
-         //  mqtt->disconnect();
          subscribed = false;
          return;
       }  // Error
@@ -406,7 +443,8 @@ void loop() {
        return;
  
   if (!powerupSent)  {
-     publishPowerupMessage();
+     publishLifecycleMessage();   // we should not have to send the other feedback messages.
+     publishPowerupMessage();     // This message I was planning on sending on powerup (before the request for lifecycle)
      publishLightfeedbackMessage(powerSetting);
      powerupSent = true;
   } else {

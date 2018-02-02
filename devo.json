@@ -70,7 +70,7 @@
       "properties": {
         "power": "boolean",
         "ambient": "number",
-        "lamp": "boolean",
+        "light": "boolean",
         "powerup": "text"
       }
     },
