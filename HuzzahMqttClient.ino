@@ -46,8 +46,9 @@ void logfln(const char *fmt, ...) {
 
 #define LED_RED   0
 #define LED_BLUE  2
-#define RELAY     14
-#define LIGHTFEEDBACK  12
+#define PIN_RELAY       14
+#define PIN_POWERDETECT 12
+#define PIN_LIGHTSTATE  13
 
 
 #define HW_UART_SPEED   115200L
@@ -89,14 +90,20 @@ static const char * mqttBroker[] =
 #define NUM_MQTT_BROKER (sizeof(mqttBroker) / sizeof(char*) )
 
 //Subscriptions:
-const char* MQTT_TOPIC_FEEDBACK     = MQTT_ID "/feedback";
-const char* MQTT_TOPIC_POWER        = MQTT_ID "/power/control";
+#define MAX_SUBSCRIPTIONS    3
+const char* MQTT_TOPIC_FEEDBACK_SUB = MQTT_ID "/feedback";
+const char* MQTT_TOPIC_POWER_SUB    = MQTT_ID "/power/control";
+const char* MQTT_TOPIC_JOVEXPRESS_FAULT_SUB = "thejoveexpress/fault";
 
 //Publications:
 const char* MQTT_TOPIC_LIFECYCLE    = MQTT_ID "/lifecycle/feedback";
 const char* MQTT_TOPIC_POWERUP      = MQTT_ID "/powerup/feedback";
 const char* MQTT_TOPIC_AMBIENT      = MQTT_ID "/ambient/feedback";
 const char* MQTT_TOPIC_LIGHTFEEDBACK = MQTT_ID "/light/feedback";
+const char* MQTT_TOPIC_POWER         = MQTT_ID "/power/feedback";
+const char* MQTT_TOPIC_FAULT_POWER   = MQTT_ID "/powerfail";
+const char* MQTT_TOPIC_FAULT_BULB    = MQTT_ID "/bulbfault";
+
 
 static MqttClient *mqtt = NULL;
 static WiFiClient network;
@@ -106,13 +113,18 @@ static bool online = false;
 int    wifiIndex = 0;
 int    redState = HIGH;
 
-int  ambientLevel = 0;
-bool powerSetting = false;
+static int  ambientLevel = 0;
+static bool powerSetting = false;
+static bool lightState = false;
+static bool powerDetect = false;
+static bool bulbFault = false;
 
+void publishPowerFeedbackMessage(void);
 void publishAmbientMessage (void);
-void publishLightfeedbackMessage ( bool onOff);
+void publishLightStateMessage ( void);
 void publishPowerupMessage(void);
-void publishPowerfailMessage(void);
+void publishPowerFaultMessage(void);
+void publishBulbFaultMessage (void);
 void publishLifecycle (void);
 
 
@@ -148,16 +160,18 @@ void blinkRed(int cnt) {
 void setup() {
   pinMode (LED_RED, OUTPUT);
   pinMode (LED_BLUE, OUTPUT);
-  pinMode (RELAY, OUTPUT);
-  pinMode (LIGHTFEEDBACK, INPUT);
+  pinMode (PIN_RELAY, OUTPUT);
+  pinMode (PIN_LIGHTSTATE, INPUT);
+  pinMode (PIN_POWERDETECT, INPUT);
   
   digitalWrite(LED_RED, redState);       // sets the digital pin 13 on
   digitalWrite(LED_BLUE, HIGH);
-  digitalWrite (RELAY, LOW);
+  digitalWrite (PIN_RELAY, LOW);
+  lightState   = digitalRead (PIN_LIGHTSTATE)== LOW ? true : false;  
+  powerDetect  = digitalRead (PIN_POWERDETECT) == LOW ? false : true;
   
   // Setup hardware serial for logging
   Serial.begin(HW_UART_SPEED);
-  
   while (!Serial);
 
   LOG_PRINTFLN("\n");
@@ -170,7 +184,6 @@ void setup() {
   for (int i = 0; i < NUM_WIFI; i++)
      LOG_PRINTFLN ("wifi[%d]: %s", i, wifi[i].ssid);
      
-
   // Setup WiFi network
   WiFi.mode(WIFI_STA);
   WiFi.hostname(MQTT_ID);
@@ -222,7 +235,7 @@ void setup() {
   //// Make 128 bytes receive buffer
   MqttClient::Buffer *mqttRecvBuffer = new MqttClient::ArrayBuffer<128>();
   //// Allow up to 2 subscriptions simultaneously
-  MqttClient::MessageHandlers *mqttMessageHandlers = new MqttClient::MessageHandlersImpl<2>();
+  MqttClient::MessageHandlers *mqttMessageHandlers = new MqttClient::MessageHandlersImpl<MAX_SUBSCRIPTIONS>();
   //// Configure client options
   MqttClient::Options mqttOptions;
   ////// Set command timeout to 10 seconds
@@ -242,20 +255,18 @@ void processPowerMessage(MqttClient::MessageData& md) {
   payload[msg.payloadLen] = '\0';
   LOG_PRINTFLN ("Received Power Control: %d", payload[0]);
   LOG_PRINTFLN ("PayloadLen = %d", msg.payloadLen);
-  LOG_PRINTFLN(
-    "Message arrived: qos %d, retained %d, dup %d, packetid %d, payload:[%s]",
+  LOG_PRINTFLN("Message arrived: qos %d, retained %d, dup %d, packetid %d, payload:[%s]",
     msg.qos, msg.retained, msg.dup, msg.id, payload
   );  
 
   powerSetting = (payload[0] == 0) ? false : true;
   if (powerSetting)
-      digitalWrite (RELAY, HIGH);
+      digitalWrite (PIN_RELAY, HIGH);
   else
-      digitalWrite (RELAY, LOW);
+      digitalWrite (PIN_RELAY, LOW);
 
-  // TODO:   We need to read the light sensor to see if the light is on or off.
-  publishLightfeedbackMessage(powerSetting);
-  
+  publishPowerFeedbackMessage();
+
   blinkRed(2);
 }
 
@@ -270,14 +281,16 @@ void processFeedbackMessage(MqttClient::MessageData& md) {
 
   // There are no args expected.  Now we are to publish everything about our device:
   publishPowerupMessage();
-  publishLightfeedbackMessage(powerSetting);  // we should really read the light state from a sensor!
+  publishPowerFeedbackMessage();
+  publishLightStateMessage();  
   publishAmbientMessage();
+  publishBulbFaultMessage();
+  publishPowerFaultMessage();
   blinkRed(3);
 }
 
 // ============== Publish Messages  ========================================
 void publishAmbientMessage (void) {
-      ambientLevel = analogRead (A0);
       LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
       char buf[10];
       buf[0] = (uint8_t)((ambientLevel & 0xFF000000) >> 24);
@@ -326,11 +339,21 @@ void publishLifecycleMessage(void) {
     blinkRed(1);
 }
 
-void publishPowerfailMessage(void) {
+void publishPowerFeedbackMessage(void) {
+      uint8_t buf = powerSetting ? 1 : 0;
+      LOG_PRINTFLN("Sending Power: %02X", buf);
+      MqttClient::Message message;
+      message.qos = MqttClient::QOS0;
+      message.retained = false;
+      message.dup = false;
+      message.payload = (void*) &buf;
+      message.payloadLen = 1;
+      mqtt->publish(MQTT_TOPIC_POWER, message);
+      blinkRed(1);
 }
 
-void publishLightfeedbackMessage(bool onOff) {
-      uint8_t buf = onOff ? 1 : 0;
+void publishLightStateMessage(void) {
+      uint8_t buf = lightState ? 1 : 0;
       LOG_PRINTFLN("Sending LightFeedback status: %02X", buf);
       MqttClient::Message message;
       message.qos = MqttClient::QOS0;
@@ -342,19 +365,46 @@ void publishLightfeedbackMessage(bool onOff) {
       blinkRed(1);
 }
 
+void publishPowerFaultMessage(void) {
+      uint8_t buf = powerDetect ? 0 : 1;   // Reverse.   If we detect power, there is no fault.
+      LOG_PRINTFLN("Sending Power Fault: %02X", buf);
+      MqttClient::Message message;
+      message.qos = MqttClient::QOS0;
+      message.retained = false;
+      message.dup = false;
+      message.payload = (void*) &buf;
+      message.payloadLen = 1;
+      mqtt->publish(MQTT_TOPIC_FAULT_POWER, message);
+      blinkRed(1);
+}
+
+void publishBulbFaultMessage (void) {
+      uint8_t buf = bulbFault ? 1 : 0;   
+      LOG_PRINTFLN("Sending Bulb Fault: %02X", buf);
+      MqttClient::Message message;
+      message.qos = MqttClient::QOS0;
+      message.retained = false;
+      message.dup = false;
+      message.payload = (void*) &buf;
+      message.payloadLen = 1;
+      mqtt->publish(MQTT_TOPIC_FAULT_BULB, message);
+      blinkRed(1);
+
+}
+
 // ============== subscribeBroker ====================================================
 void subscribeBroker( void ) {
     if (!subscribed) {
       // Add subscribe here if required
       MqttClient::Error::type rc = mqtt->subscribe(
-          MQTT_TOPIC_POWER, MqttClient::QOS0, processPowerMessage
+          MQTT_TOPIC_POWER_SUB, MqttClient::QOS0, processPowerMessage
       );
-      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER);
+      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_POWER_SUB);
 
      rc = mqtt->subscribe(
-          MQTT_TOPIC_FEEDBACK, MqttClient::QOS0, processFeedbackMessage
+          MQTT_TOPIC_FEEDBACK_SUB, MqttClient::QOS0, processFeedbackMessage
       );
-      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_FEEDBACK);
+      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_FEEDBACK_SUB);
         
       subscribed = true;
       if (rc != MqttClient::Error::SUCCESS) {
@@ -424,6 +474,14 @@ bool connectBrokerSocket ( void ) {
    options.clientID.cstring = (char*)MQTT_ID;
    options.cleansession = true;
    options.keepAliveInterval = 15; // 15 seconds
+//   options.willFlag 
+   options.will = { {'M', 'Q', 'T', 'W'}, 0, {NULL, {0, NULL}}, {NULL, {0, NULL}}, 0, 0 };
+//   options.will.struct_id = "MQTW";
+//   options.will.struct_version = 0;
+//   options.will.topicName = // MQTTstring;
+//   options.will.message   = // MQTTstring
+//   options.will.qos = //
+      
    MqttClient::Error::type rc = mqtt->connect(options, connectResult);
    if (rc != MqttClient::Error::SUCCESS) {
       LOG_PRINTFLN("Connection error: %i", rc);
@@ -443,14 +501,51 @@ void loop() {
        return;
  
   if (!powerupSent)  {
-     publishLifecycleMessage();   // we should not have to send the other feedback messages.
-     publishPowerupMessage();     // This message I was planning on sending on powerup (before the request for lifecycle)
-     publishLightfeedbackMessage(powerSetting);
+     int lightState    =  digitalRead ( PIN_LIGHTSTATE ) == LOW ? true : false;
+     int powerDetect   = digitalRead ( PIN_POWERDETECT ) == LOW ? false : true;
+     int ambientLevel  = analogRead (A0);
+
+     LOG_PRINTFLN("LightState = %d", lightState);
+     LOG_PRINTFLN ("powerDetect = %d", powerDetect);
+
+     publishLifecycleMessage();   
+     publishPowerFeedbackMessage();
+     publishPowerupMessage();     
+     publishLightStateMessage();
+     publishPowerFaultMessage();
+     
+     if (! bulbFault && powerDetect && powerSetting  && !lightState) {
+         bulbFault = true;
+     }
+     publishBulbFaultMessage();
      powerupSent = true;
   } else {
-     // Need to add logic to read our inputs and decide when to publish the messages.
-     publishAmbientMessage();
-  }
+     int currentLight = digitalRead ( PIN_LIGHTSTATE ) == LOW ? true : false;
+     int currentPower = digitalRead ( PIN_POWERDETECT ) == LOW ? false : true;
+     int currentAmbient = analogRead (A0);
+
+     if (currentLight != lightState) {
+        lightState = currentLight;;
+        publishLightStateMessage();  
+     }
+     
+     if (currentPower != powerDetect) {
+        powerDetect = currentPower;
+        publishPowerFaultMessage();
+     }
+
+     if (currentAmbient != ambientLevel) {
+        ambientLevel = currentAmbient;
+        publishAmbientMessage();
+     }
+     if (! bulbFault && powerDetect && powerSetting  && !lightState) {
+         bulbFault = true;
+         publishBulbFaultMessage();
+     } else if (bulbFault && powerDetect && powerSetting && lightState ) {
+         bulbFault = false;
+         publishBulbFaultMessage();
+     }
+   }
   // Idle for 250msec
   mqtt->yield(250L);
 }  //Loop
