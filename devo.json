@@ -1,23 +1,13 @@
 {
   "messageServers": [
     {
-      "id": 1,
-      "host": "192.168.1.79",
-      "port": 1883
-    },
-    {
       "id": 2,
       "host": "localhost",
       "port": 1883
     },
     {
-      "id": 3,
-      "host": "192.168.1.174",
-      "port": 1883
-    },
-    {
-      "id": 4,
-      "host": "192.168.10.1",
+      "id": 5,
+      "host": "192.168.1.240",
       "port": 1883
     }
   ],
@@ -28,9 +18,9 @@
       "forward": 1
     },
     "LightOverride": {
+      "off": 0,
       "on": 1,
-      "auto": 2,
-      "off": 0
+      "auto": 2
     }
   },
   "types": {
@@ -61,16 +51,23 @@
     "streetlight": {
       "alerts": [
         {
-          "name": "Bulb Fault",
-          "condition": "power && ! lampfeedback",
+          "name": "Bulb",
+          "condition": "bulbfault",
+          "sticky": false
+        },
+        {
+          "name": "Power Outage",
+          "condition": "powerfail",
           "sticky": false
         }
       ],
-      "messageServerId": 4,
+      "messageServerId": 5,
       "properties": {
-        "power": "boolean",
         "ambient": "number",
+        "bulbfault": "boolean",
         "light": "boolean",
+        "power": "boolean",
+        "powerfail": "boolean",
         "powerup": "text"
       }
     },
@@ -111,7 +108,6 @@
           }
         }
       },
-      "messageServerId": 1,
       "properties": {
         "fault": "boolean",
         "lifecycle": "boolean"
