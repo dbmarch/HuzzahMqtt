@@ -54,7 +54,7 @@ void logfln(const char *fmt, ...) {
 #define HW_UART_SPEED   115200L
 
 // convert to using a port pin for identification
-#define UNIT    1
+#define UNIT    2
 
 #if UNIT == 1
 #define MQTT_ID         "lamp-001"
@@ -289,6 +289,27 @@ void processFeedbackMessage(MqttClient::MessageData& md) {
   blinkRed(3);
 }
 
+void processJoveExpressFaultMessage (MqttClient::MessageData& md) {
+  const MqttClient::Message& msg = md.message;
+  char payload[msg.payloadLen + 1];
+  memcpy(payload, msg.payload, msg.payloadLen);
+  payload[msg.payloadLen] = '\0';
+  LOG_PRINTFLN ("Received Feedback");
+  LOG_PRINTFLN ("PayloadLen = %d", msg.payloadLen);
+  LOG_PRINTFLN( "Message arrived: qos %d, retained %d, dup %d, packetid %d",
+    msg.qos, msg.retained, msg.dup, msg.id );  
+
+  for (int i = 0; i < 10; i++) {
+    digitalWrite (LED_BLUE, HIGH);
+    digitalWrite (LED_RED, LOW);
+    delay(500);
+    digitalWrite (LED_BLUE, LOW);
+    digitalWrite (LED_RED, HIGH);
+    delay(500);
+  }
+  blinkRed(1);
+}
+
 // ============== Publish Messages  ========================================
 void publishAmbientMessage (void) {
       LOG_PRINTFLN("Sending ambient status: %04X", ambientLevel);
@@ -406,6 +427,11 @@ void subscribeBroker( void ) {
       );
       LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_FEEDBACK_SUB);
         
+      rc = mqtt->subscribe(
+          MQTT_TOPIC_JOVEXPRESS_FAULT_SUB, MqttClient::QOS0, processJoveExpressFaultMessage
+      );
+      LOG_PRINTFLN ("Subscribing to %s", MQTT_TOPIC_JOVEXPRESS_FAULT_SUB);
+ 
       subscribed = true;
       if (rc != MqttClient::Error::SUCCESS) {
          LOG_PRINTFLN("Subscribe error: %i", rc);
